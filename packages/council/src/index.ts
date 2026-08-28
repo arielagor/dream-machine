@@ -36,6 +36,7 @@ import {
 import type { CouncilVote, Family } from './schema.js';
 import { tally, type TallyResult } from './tally.js';
 
+export * from './gather.js';
 export * from './policy.js';
 export * from './prompt.js';
 export * from './schema.js';

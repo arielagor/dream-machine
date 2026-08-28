@@ -1,18 +1,18 @@
 {
   "name": "dream-machine",
   "version": "0.1.1",
-  "description": "The Dream Machine — a config-driven engine for nightly, cloud-scheduled, evidence-gated repository evolution. It never merges; a human does.",
+  "description": "The Dream Machine — a config-driven engine for nightly, cloud-scheduled, evidence-gated repository evolution. A council of model families decides the merge.",
   "type": "module",
   "license": "MIT",
   "author": "rUv <ruv@ruv.net>",
-  "homepage": "https://github.com/ruvnet/dream-machine",
+  "homepage": "https://github.com/arielagor/dream-machine",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ruvnet/dream-machine.git",
+    "url": "https://github.com/arielagor/dream-machine.git",
     "directory": "packages/cli"
   },
   "bugs": {
-    "url": "https://github.com/ruvnet/dream-machine/issues"
+    "url": "https://github.com/arielagor/dream-machine/issues"
   },
   "bin": {
     "dream-machine": "dist/bin.js"
@@ -35,7 +35,8 @@
     "@dream-machine/compile": "0.1.0",
     "@dream-machine/ledger": "0.1.0",
     "@dream-machine/witness": "0.1.0",
-    "@dream-machine/schedule": "0.1.0"
+    "@dream-machine/schedule": "0.1.0",
+    "@dream-machine/council": "0.1.0"
   },
   "keywords": [
     "dream-machine",
@@ -47,6 +48,8 @@
     "nightly",
     "cli",
     "metaharness",
-    "ruvnet"
+    "ruvnet",
+    "council",
+    "multi-model"
   ]
 }

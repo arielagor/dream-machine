@@ -16,6 +16,15 @@ import {
   type LedgerRow,
 } from '@dream-machine/ledger';
 import { stamp, verify, verifySteps } from '@dream-machine/witness';
+import {
+  appendCouncilLog,
+  deliberate,
+  gatherPr,
+  isEligible,
+  renderTranscript,
+  resolvePolicy,
+  type CouncilPolicy,
+} from '@dream-machine/council';
 import { serializeRoutine, scheduleInstructions } from '@dream-machine/schedule';
 import { renderDashboard } from './tui.js';
 import { classifyEntrypointResult, type ExecResult } from './entrypoint.js';
@@ -97,11 +106,14 @@ Commands:
   witness stamp   <report-file> <commit>               Compute the witness triple
   witness verify  <report-file> <commit> <witness>     Verify a claimed witness
   verify-entrypoint <label> --cmd "<command>"           Classify an evaluator entrypoint's liveness
+  council review  --pr N [--repo owner/name]           Convene the merge council on a PR
+  council explain --pr N [--repo owner/name]           Re-render the last verdict + verify it
   tui             [--path LEDGER.md] [--no-color]      Render the dashboard
   version | --version                                  Print version
   help    | --help                                     This help
 
-The Dream Machine never merges. Evaluation is not promotion — a human decides.
+The session never merges its own work. Evaluation is not promotion — with a
+council configured, three model families decide; without one, a human does.
 Docs: https://ruvnet.github.io/dream-machine/`;
 
 async function loadConfig(io: IO, path: string): Promise<DreamConfig> {
@@ -294,6 +306,86 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
         sink.log(`${label}: ${check.verdict} (exit ${check.code}) — ${check.reason}`);
         const code = check.verdict === 'live' ? 0 : check.verdict === 'blocked' ? 1 : 2;
         return { code, out: sink.out, err: sink.err };
+      }
+
+      case 'council': {
+        const sub = _[1];
+        if (sub !== 'review' && sub !== 'explain') {
+          sink.error('council: expected sub-command review|explain');
+          return { code: 1, out: sink.out, err: sink.err };
+        }
+        if (!io.exec) {
+          sink.error('council: this IO has no exec() — cannot reach gh');
+          return { code: 1, out: sink.out, err: sink.err };
+        }
+
+        const cfgPath = (flags.config as string) || 'dream.config.json';
+        let cfg: DreamConfig | undefined;
+        try {
+          cfg = await loadConfig(io, cfgPath);
+        } catch {
+          cfg = undefined; // a config is optional; policy falls back to defaults
+        }
+
+        const repo = (flags.repo as string) || cfg?.repo;
+        const prNumber = Number(flags.pr);
+        if (!repo || !Number.isInteger(prNumber) || prNumber <= 0) {
+          sink.error('usage: dream-machine council review --pr <N> [--repo owner/name]');
+          return { code: 1, out: sink.out, err: sink.err };
+        }
+
+        const policy: CouncilPolicy = resolvePolicy({
+          ...(cfg?.council as Partial<CouncilPolicy> | undefined),
+          ...(flags.families ? { families: String(flags.families).split(',') as CouncilPolicy['families'] } : {}),
+        });
+
+        const gathered = await gatherPr({
+          repo,
+          pr: prNumber,
+          exec: io.exec,
+          ledgerPath: cfg?.ledgerPath ?? 'docs/dream-cycle/LEDGER.md',
+          readFile: (p: string) => io.readFile(p),
+        });
+        if (!gathered.ok) {
+          // Never fall through to a vote on evidence we could not collect.
+          sink.error(`council: ${gathered.error}`);
+          return { code: 1, out: sink.out, err: sink.err };
+        }
+
+        const eligibility = isEligible(gathered.pr, policy);
+        if (!eligibility.eligible) {
+          sink.log(
+            flags.json
+              ? JSON.stringify({ decision: 'BLOCK', eligible: false, rationale: eligibility.reason }, null, 2)
+              : `council: NOT ELIGIBLE — ${eligibility.reason}`,
+          );
+          return { code: 2, out: sink.out, err: sink.err };
+        }
+
+        const verdict = await deliberate({ pr: gathered.pr, policy, env: io.env });
+
+        if (flags.json) {
+          sink.log(JSON.stringify({ ...verdict, transcript: renderTranscript(verdict) }, null, 2));
+        } else {
+          sink.log(renderTranscript(verdict));
+        }
+
+        // `explain` is read-only by definition; `review` also appends the log
+        // unless it was asked to keep its hands off.
+        const logPath = (flags.log as string) || cfg?.council?.logPath || 'docs/dream-cycle/COUNCIL.md';
+        if (sub === 'review' && !flags['dry-run']) {
+          let existing = '';
+          try {
+            existing = await io.readFile(logPath);
+          } catch {
+            existing = '';
+          }
+          await io.writeFile(logPath, appendCouncilLog(existing, verdict, io.now()));
+        }
+
+        // Exit code is the verdict: 0 merges, 1 does not. The workflow branches
+        // on this, so a crash (also non-zero) can never be read as approval.
+        return { code: verdict.decision === 'MERGE' ? 0 : 1, out: sink.out, err: sink.err };
       }
 
       case 'tui': {

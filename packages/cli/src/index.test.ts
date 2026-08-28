@@ -242,3 +242,144 @@ describe('tui', () => {
     expect(frame).toContain('zero merges');
   });
 });
+
+type ExecOut = { code: number; stdout: string; stderr: string };
+const ok = (stdout: string): ExecOut => ({ code: 0, stdout, stderr: '' });
+
+describe('council', () => {
+  const CFG = JSON.stringify({
+    repo: 'arielagor/dream-machine',
+    cron: '0 9 * * *',
+    slots: [{ deep: 'x', scan: ['a', 'b'] }],
+    council: { enabled: true, families: ['claude', 'gemini', 'xai'], quorum: 2 },
+  });
+
+  const prJson = (o: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      number: 7,
+      title: 'dream(x): a candidate',
+      body: 'Hypothesis: ...',
+      isDraft: true,
+      baseRefName: 'main',
+      headRefName: 'dream/2026-08-28-x',
+      headRefOid: 'c'.repeat(40),
+      headRepositoryOwner: { login: 'arielagor' },
+      author: { login: 'dream-machine[bot]' },
+      additions: 3,
+      deletions: 1,
+      files: [{ path: 'README.md' }],
+      statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS' }],
+      ...o,
+    });
+
+  /** An IO whose exec answers `gh pr view` / `gh pr diff` from a script. */
+  function ghIO(
+    handlers: { view?: () => ExecOut; diff?: () => ExecOut } = {},
+    files: Record<string, string> = {},
+  ): IO {
+    return {
+      ...mockIO({ 'dream.config.json': CFG, ...files }),
+      exec: async (cmd: string) => {
+        if (cmd.includes('gh pr view')) return (handlers.view ?? (() => ok(prJson())))();
+        if (cmd.includes('gh pr diff')) return (handlers.diff ?? (() => ok('--- a\n+++ b\n+x\n')))();
+        return { code: 127, stdout: '', stderr: `unexpected command: ${cmd}` };
+      },
+    };
+  }
+
+  it('rejects an unknown sub-command', async () => {
+    const r = await run(['council', 'merge', '--pr', '7'], ghIO());
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('expected sub-command review|explain');
+  });
+
+  it('refuses to run without an exec surface', async () => {
+    const r = await run(['council', 'review', '--pr', '7'], mockIO({ 'dream.config.json': CFG }));
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('no exec()');
+  });
+
+  it('requires a PR number', async () => {
+    const r = await run(['council', 'review'], ghIO());
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('usage: dream-machine council review');
+  });
+
+  it('rejects a non-numeric PR rather than gathering nothing', async () => {
+    const r = await run(['council', 'review', '--pr', 'main'], ghIO());
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('usage:');
+  });
+
+  it('fails closed when the PR cannot be fetched — never votes on absent evidence', async () => {
+    const r = await run(
+      ['council', 'review', '--pr', '7'],
+      ghIO({ view: () => ({ code: 1, stdout: '', stderr: 'gh: no such PR' }) }),
+    );
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('gh pr view failed');
+  });
+
+  it('fails closed on an empty diff', async () => {
+    const r = await run(['council', 'review', '--pr', '7'], ghIO({ diff: () => ok('   \n') }));
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('empty');
+  });
+
+  it('short-circuits an external PR before spending a single model call', async () => {
+    let diffCalls = 0;
+    const io = ghIO({
+      view: () => ok(prJson({ headRepositoryOwner: { login: 'a-stranger' } })),
+      diff: () => {
+        diffCalls++;
+        return ok('--- a\n+++ b\n+x\n');
+      },
+    });
+    const r = await run(['council', 'review', '--pr', '7'], io);
+    expect(r.code).toBe(2); // distinct from both MERGE (0) and BLOCK (1)
+    expect(r.out).toContain('NOT ELIGIBLE');
+    expect(r.out).toContain('not council-judged');
+    expect(diffCalls).toBe(1); // evidence gathered, but no deliberation followed
+  });
+
+  it('reports ineligibility as JSON when asked', async () => {
+    const io = ghIO({ view: () => ok(prJson({ headRepositoryOwner: { login: 'a-stranger' } })) });
+    const r = await run(['council', 'review', '--pr', '7', '--json'], io);
+    expect(JSON.parse(r.out)).toMatchObject({ decision: 'BLOCK', eligible: false });
+  });
+
+  it('does not convene when the config disables the council', async () => {
+    const disabled = JSON.stringify({
+      repo: 'arielagor/dream-machine',
+      cron: '0 9 * * *',
+      slots: [{ deep: 'x', scan: ['a', 'b'] }],
+      council: { enabled: false, families: ['claude', 'gemini', 'xai'], quorum: 2 },
+    });
+    const r = await run(['council', 'review', '--pr', '7'], ghIO({}, { 'dream.config.json': disabled }));
+    expect(r.code).toBe(2);
+    expect(r.out).toContain('disabled by config');
+  });
+
+  it('takes the repo from the config when --repo is omitted', async () => {
+    const seen: string[] = [];
+    const io: IO = {
+      ...mockIO({ 'dream.config.json': CFG }),
+      exec: async (cmd: string) => {
+        seen.push(cmd);
+        if (cmd.includes('gh pr view')) return ok(prJson({ headRepositoryOwner: { login: 'a-stranger' } }));
+        return ok('--- a\n+++ b\n+x\n');
+      },
+    };
+    await run(['council', 'review', '--pr', '7'], io);
+    expect(seen[0]).toContain('--repo arielagor/dream-machine');
+  });
+});
+
+describe('help text', () => {
+  it('no longer claims a human decides the merge', async () => {
+    const r = await run(['help'], mockIO());
+    expect(r.out).toContain('three model families decide');
+    expect(r.out).toContain('council review');
+    expect(r.out).not.toContain('The Dream Machine never merges.');
+  });
+});
