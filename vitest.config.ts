@@ -11,6 +11,7 @@ export default defineConfig({
       '@dream-machine/witness': p('./packages/witness/src/index.ts'),
       '@dream-machine/schedule': p('./packages/schedule/src/index.ts'),
       '@dream-machine/memory': p('./packages/memory/src/index.ts'),
+      '@dream-machine/council': p('./packages/council/src/index.ts'),
     },
   },
   test: {

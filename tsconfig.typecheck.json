@@ -1,0 +1,9 @@
+{
+  "//": "Typechecks every package's sources AND tests in one pass. The root tsconfig.json is an empty solution stub, so `tsc -b` against it fails with TS18002 and typechecks nothing — this file is what `npm run typecheck` actually points at.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["packages/*/src/**/*.ts"]
+}

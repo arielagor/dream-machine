@@ -1,0 +1,42 @@
+{
+  "name": "@dream-machine/council",
+  "version": "0.1.0",
+  "description": "The council of model families — the Dream Machine's merge judgement, made by Claude, Gemini and Grok instead of a human.",
+  "type": "module",
+  "license": "MIT",
+  "author": "rUv <ruv@ruv.net>",
+  "homepage": "https://github.com/arielagor/dream-machine",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arielagor/dream-machine.git",
+    "directory": "packages/council"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@dream-machine/witness": "0.1.0"
+  },
+  "keywords": [
+    "dream-machine",
+    "council",
+    "merge-gate",
+    "multi-model",
+    "adversarial",
+    "autonomous"
+  ]
+}
