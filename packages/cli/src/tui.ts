@@ -90,7 +90,7 @@ export function renderDashboard(ledgerMd: string, opts: DashboardOptions = {}): 
   if (signals.duplicateDirections.length) sig.push(`${c.yellow}⚠ ${signals.duplicateDirections.length} duplicate direction(s)${c.reset}`);
   const sigLine = sig.length ? sig.join('   ') : `${c.green}✓ signals nominal${c.reset}`;
   lines.push(`${c.violet}│${c.reset} ${pad(sigLine, W - 2)} ${c.violet}│${c.reset}`);
-  lines.push(`${c.violet}│${c.reset} ${pad(`${c.dim}evaluation is not promotion · the machine never merges · a human does${c.reset}`, W - 2)} ${c.violet}│${c.reset}`);
+  lines.push(`${c.violet}│${c.reset} ${pad(`${c.dim}evaluation is not promotion · the producer never judges · a council decides${c.reset}`, W - 2)} ${c.violet}│${c.reset}`);
   lines.push(`${c.violet}╰${bar}╯${c.reset}`);
 
   return lines.join('\n');

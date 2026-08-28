@@ -8,6 +8,14 @@
 - **Composes**: `@metaharness/flywheel` 0.1.10, `@metaharness/darwin` 0.9.1, `@metaharness/redblue` 0.1.4, `metaharness` CLI 0.4.5, ruvector 0.2.41, agentdb 3.0.0-alpha (all optional/peer — see §4)
 - **Prior instances**: `ruvnet/metaharness` ADR-251 (MetaHarness Nightly Dream Cycle); the Ruflo Nightly Dream Cycle v3 (gist `ruvnet/889ffa92dab49d508e70b123c940e1b9`)
 
+> **Superseded in part by [ADR-0003](./ADR-0003-council-of-model-families-merge-gate.md) in this fork.**
+> Everything below still holds except the merge boundary. Where this ADR says a
+> **human** performs the merge — the "evaluation is not promotion" guarantee and
+> the guarded auto-merge policy — `arielagor/dream-machine` instead convenes a
+> council of three model families from three providers, and merges on their
+> majority. The half of the guarantee that survives is that the **producer never
+> judges**: the nightly session still never merges its own candidate.
+
 ---
 
 ## 1. Context
@@ -125,7 +133,9 @@ implementation; do not introduce dependencies merely to satisfy this prompt."
 - The ledger row is written on every run, even a budget-forced halt
   (`HALT: budget`) — it is the only durable cross-night memory.
 - All output lands as gists, issues, and always-**draft** PRs. Promotion is a
-  human act.
+  human act. *(Superseded by ADR-0003 in this fork: promotion is an act of the
+  council of model families. The session's own output is unchanged — it still
+  only ever produces a draft PR.)*
 
 ## 3. Consequences
 

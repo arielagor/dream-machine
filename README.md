@@ -1,23 +1,25 @@
 <div align="center">
 
-<a href="https://ruvnet.github.io/dream-machine/" title="Open the live site — interactive 4D hero"><img src="docs/media/hero.jpg" alt="Dream Machine — one honest cycle, every single night" width="100%"></a>
+<img src="docs/media/hero.jpg" alt="Dream Machine — one honest cycle, every single night" width="100%">
 
-# ☾ Dream Machine
+# ☾ Dream Machine — Council Edition
 
-**A config-driven engine for nightly, cloud-scheduled, evidence-gated repository evolution.**
+**A config-driven engine for nightly, cloud-scheduled, evidence-gated repository evolution — where three model families, not a human, decide the merge.**
 
-[![CI](https://github.com/ruvnet/dream-machine/actions/workflows/ci.yml/badge.svg)](https://github.com/ruvnet/dream-machine/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/ruvnet/dream-machine/actions/workflows/codeql.yml/badge.svg)](https://github.com/ruvnet/dream-machine/actions/workflows/codeql.yml)
+[![CI](https://github.com/arielagor/dream-machine/actions/workflows/ci.yml/badge.svg)](https://github.com/arielagor/dream-machine/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/arielagor/dream-machine/actions/workflows/codeql.yml/badge.svg)](https://github.com/arielagor/dream-machine/actions/workflows/codeql.yml)
 [![npm](https://img.shields.io/npm/v/dream-machine?color=8b5cf6)](https://www.npmjs.com/package/dream-machine)
 [![license](https://img.shields.io/badge/license-MIT-22d3ee)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-ruvnet.github.io%2Fdream--machine-e879f9)](https://ruvnet.github.io/dream-machine/)
 
-**[Website & walkthrough →](https://ruvnet.github.io/dream-machine/)** · **[Dashboard](https://ruvnet.github.io/dream-machine/dashboard.html)** · **[Tutorials](https://ruvnet.github.io/dream-machine/tutorials.html)** · **[ADR-0001](docs/adrs/ADR-0001-dream-machine-engine.md)**
+**[ADR-0003 — why a council replaced the human](docs/adrs/ADR-0003-council-of-model-families-merge-gate.md)** · **[Council log](docs/dream-cycle/COUNCIL.md)** · **[ADR-0001](docs/adrs/ADR-0001-dream-machine-engine.md)** · **[Upstream](https://github.com/ruvnet/dream-machine)**
 
 </div>
 
 > Freeze the model. Evolve the harness. **Evaluation is not promotion** — the
-> machine never merges; a human does.
+> session that writes a candidate never merges it. In this fork the one who does
+> is not a human: it is a council of Claude, Gemini and Grok, and two of the
+> three carry it.
 
 ```bash
 npx dream-machine init --repo owner/name --out dream.config.json
@@ -65,6 +67,7 @@ npm i -g dream-machine       # or use npx
 dream-machine init --repo owner/name --out dream.config.json   # scaffold a config
 dream-machine compile dream.config.json --out PROMPT.md        # config → routine prompt
 dream-machine schedule dream.config.json --out routine.json    # cloud /schedule body
+dream-machine council review --pr 42 --repo owner/name         # convene the merge council
 dream-machine ledger verify  --path docs/dream-cycle/LEDGER.md # structural checks
 dream-machine ledger signals --path docs/dream-cycle/LEDGER.md # STEP 1.1 learning signals
 dream-machine witness stamp  report.md <commit>                # provenance stamp
@@ -122,9 +125,11 @@ STEP C — follow /tmp/tonight.md EXACTLY: the full 26-step pipeline
 
 Invariants: end in exactly one of ACCEPT | REJECT | INCONCLUSIVE (INCONCLUSIVE
 with LLM_EVAL=blocked when there's no API key is a legitimate, successful night).
-Evaluation is not promotion — NEVER merge, NEVER self-promote. Publish a public
-gist + a labeled issue + a DRAFT PR, and append exactly one row to
-docs/dream-cycle/LEDGER.md every run. Never weaken a test; never force-push.
+Evaluation is not promotion — NEVER merge your own candidate, NEVER self-promote.
+The council gate reviews your DRAFT PR afterwards and decides; write the PR body
+for that reader. Publish a public gist + a labeled issue + a DRAFT PR, and append
+exactly one row to docs/dream-cycle/LEDGER.md every run. Never weaken a test;
+never force-push.
 ```
 
 > Prefer to keep the whole prompt inline instead of the bootstrap?
@@ -188,31 +193,108 @@ backends** — a night without any of them is a *degraded* night, not a failed o
 | [`@dream-machine/witness`](packages/witness) | `sha256(sha256(report) + commit)` stamp / verify |
 | [`@dream-machine/schedule`](packages/schedule) | the cloud `/schedule` routine body emitter |
 | [`@dream-machine/memory`](packages/memory) | optional ruvector/RVF semantic memory, flat-file fallback |
+| [`@dream-machine/council`](packages/council) | the three-family merge council: families, prompts, tally, witness |
+
+## The merge gate — a council, not a person
+
+Upstream, a merge needed a human to attach an `automerge-safe` label, and any PR
+touching a gate, threshold, workflow, or dependency manifest was human-review-only
+regardless. Here that job belongs to three model families from three providers.
+
+```
+PR opened  →  authorship + kill-switch check  →  wait for required checks
+           →  round 1: three independent votes, blind to each other
+           →  round 2: each family reads the others' votes and cross-examines
+           →  tally (plain arithmetic, in code)  →  merge or block
+```
+
+Two of three `MERGE` votes merge it. Flat, on every path — including changes to
+the council's own code. Nothing is human-gated; see
+[ADR-0003](docs/adrs/ADR-0003-council-of-model-families-merge-gate.md) for why
+that was chosen over a tiered quorum, and what it costs.
+
+Run it by hand against any PR:
+
+```bash
+dream-machine council review  --pr 42 --repo owner/name          # convene and (if it merges) log
+dream-machine council review  --pr 42 --json --dry-run           # full transcript, decide nothing
+```
+
+The exit code *is* the verdict: `0` merge, `1` block, `2` not eligible. Anything
+else means the CLI itself failed, which the workflow also treats as a block.
+
+**Check `familiesUsed` in the JSON.** Fewer than three means the panel degraded,
+and a degraded panel is not the cross-provider check this exists to provide — so
+it blocks.
+
+### Setup
+
+Three repository secrets, and the loop runs without you:
+
+| Secret | For | Cost |
+|---|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude, via the `claude` CLI | your Claude subscription — run `claude setup-token` once |
+| `GEMINI_API_KEY` | Gemini | metered, cents per PR |
+| `XAI_API_KEY` | Grok | metered, cents per PR |
+
+Claude deliberately goes through the CLI rather than the Messages API: it keeps
+the vote on the subscription and keeps this workspace free of runtime
+dependencies. A missing secret does not shrink the panel quietly — it makes that
+family unreachable, which blocks the merge.
+
+Repository variable `COUNCIL_ENABLED=false` switches the gate off entirely. It is
+an off switch, not a review step.
+
+> The nightly research workflow's `schedule:` is still commented out, as
+> upstream. The council gate is live on PR events regardless; uncommenting that
+> cron is what starts the fully autonomous nightly loop.
 
 ## Safety
 
-The Dream Machine runs autonomously, so its guarantees are enforced in code and
-CI, not just documented (see [SECURITY.md](SECURITY.md) and
-[ADR-0001](docs/adrs/ADR-0001-dream-machine-engine.md)):
+This fork has no human in the merge path, so its guarantees are enforced in code
+and CI rather than by a reviewer (see [SECURITY.md](SECURITY.md) and
+[ADR-0003](docs/adrs/ADR-0003-council-of-model-families-merge-gate.md)):
 
-- **Evaluation is not promotion.** The session never merges and never
-  self-promotes; it opens *draft* PRs only.
-- **Guarded auto-merge.** The optional auto-merge job refuses any PR touching a
-  protected path (gates, safety, thresholds, CI, dependency manifests) and
-  requires an explicit label plus green required checks. The session never runs
-  the merge itself.
+- **The producer never judges.** The nightly session still never merges its own
+  candidate and opens *draft* PRs only. A separate process, with no authoring
+  context, casts the votes — that separation is what makes a majority mean
+  anything, and it is the half of the upstream guarantee that survives.
+- **A degraded panel never merges.** If any family is unreachable, the vote is
+  void. This is the rule that matters most: the families that *do* answer still
+  return confident, well-formed votes, so without it a provider outage silently
+  turns a three-family gate into a one-family gate that still reads as unanimous.
+  Unparseable output becomes `ABSTAIN`, which counts as not-a-merge.
+- **The count is code, not a model.** `tally()` is plain arithmetic. A
+  synthesiser deciding "what the panel meant" would collapse the gate back into
+  a single model's opinion.
+- **Proven in CI, not asserted.** A `council-fails-closed` job runs the real gate
+  with every model credential absent and fails if it returns `MERGE`.
+- **External PRs are not council-judged.** The gate runs on
+  `pull_request_target` in a public repo, so only PRs whose head branch is in
+  this repository are voted on, and the workflow checks out `base.sha` — never
+  the PR head — so untrusted code never runs beside the secrets.
 - **Optional deps stay optional** (ADR-150) — a CI job proves the engine builds
   and tests with the ruvector wasm backends absent.
-- **Witnessed provenance** — every report is bound to its commit by a
-  reproducible double-sha256 anyone can re-derive.
+- **Witnessed provenance** — every report *and every merge verdict* is bound to
+  its commit by a reproducible double-sha256 anyone can re-derive.
 
 ## Prior art
 
-The design answers a known failure mode of open-loop autonomous research agents
-(Sakana AI's "The AI Scientist" reward-hacking incident; AutoGPT/BabyAGI-era
+The upstream design answers a known failure mode of open-loop autonomous research
+agents (Sakana AI's "The AI Scientist" reward-hacking incident; AutoGPT/BabyAGI-era
 loops with ~5% follow-through). The promotion gate, adversarial critic,
 reward-hack check, and human-only merge boundary exist precisely because of them.
 
+Removing the human raises that stake rather than settling it, and this fork does
+not pretend otherwise. What replaces the human is an adversarial panel drawn from
+three providers, so a reward hack has to fool three different training lineages
+at once instead of one tired reader — and a panel that cannot be fully assembled
+declines rather than proceeds. Three models can still agree and be wrong
+together. [ADR-0003](docs/adrs/ADR-0003-council-of-model-families-merge-gate.md)
+states plainly what was gained and what was given up.
+
 ## License
 
-MIT © [rUv](https://github.com/ruvnet)
+MIT © [rUv](https://github.com/ruvnet). Council fork by
+[arielagor](https://github.com/arielagor); upstream engine unchanged except where
+[ADR-0003](docs/adrs/ADR-0003-council-of-model-families-merge-gate.md) says so.

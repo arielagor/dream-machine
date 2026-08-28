@@ -229,7 +229,8 @@ describe('tui', () => {
     expect(r.code).toBe(0);
     expect(r.out).toContain('DREAM MACHINE');
     expect(r.out).toContain('security-adversarial');
-    expect(r.out).toContain('never merges');
+    expect(r.out).toContain('the producer never judges');
+    expect(r.out).toContain('a council decides');
   });
   it('renderDashboard handles an empty ledger', () => {
     const frame = renderDashboard(emptyLedger(), { noColor: true });

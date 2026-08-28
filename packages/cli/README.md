@@ -13,7 +13,8 @@
 </div>
 
 > **Freeze the model. Evolve the harness.**
-> _Evaluation is not promotion_ — the machine never merges; a human does.
+> _Evaluation is not promotion_ — the session that writes a candidate never
+> merges it. A council of three model families decides that.
 
 ```bash
 npx dream-machine init --repo owner/name --out dream.config.json
@@ -62,15 +63,17 @@ tomorrow's search space, not for producing PRs.
 │ 2026-08-18  developer-experience ACCEPT         tui verdict panel          │
 │ …                                                                          │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ evaluation is not promotion · the machine never merges · a human does      │
+│ evaluation is not promotion · the producer never judges · a council decides│
 ╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Zero dependencies
 
 This CLI **bundles** the engine modules — `@dream-machine/compile`,
-`@dream-machine/ledger`, `@dream-machine/witness`, `@dream-machine/schedule` —
-so `npx dream-machine` has no runtime dependencies to install. Prefer the
+`@dream-machine/ledger`, `@dream-machine/witness`, `@dream-machine/schedule`,
+`@dream-machine/council` — so `npx dream-machine` has no runtime dependencies to
+install. The council reaches Claude through the `claude` CLI and Gemini/Grok over
+plain `fetch`, so adding a merge gate did not add a dependency either. Prefer the
 modules directly? They're published standalone under the
 [`@dream-machine`](https://www.npmjs.com/org/dream-machine) scope.
 
