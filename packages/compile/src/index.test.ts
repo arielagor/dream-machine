@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compile, validateConfig, defaultConfig, withDefaults, type DreamConfig } from './index.js';
+import { compile, validateConfig, defaultConfig, defaultCouncil, withDefaults, type DreamConfig } from './index.js';
 
 const metaharness: DreamConfig = {
   repo: 'ruvnet/metaharness',
@@ -134,5 +134,96 @@ describe('defaults', () => {
     expect(c.ledgerPath).toBe('docs/dream-cycle/LEDGER.md');
     expect(c.branchPrefix).toBe('dream/');
     expect(c.labels).toContain('dream-cycle');
+  });
+});
+
+describe('council merge policy', () => {
+  const withCouncil = { ...metaharness, council: defaultCouncil() };
+
+  it('replaces the human gate with the council when enabled', () => {
+    const p = compile(withCouncil);
+    expect(p).toContain('COUNCIL OF MODEL FAMILIES');
+    expect(p).toContain('no human gate');
+    expect(p).toContain('claude, gemini, xai');
+    expect(p).not.toContain('Human review required');
+    expect(p).not.toContain('guarded auto-merge ENABLED');
+  });
+
+  it('keeps producer/judge separation — the session still never merges', () => {
+    const p = compile(withCouncil);
+    expect(p).toContain('Never merge your own');
+    expect(p).toContain('The producer does not judge');
+  });
+
+  it('states the quorum and the degraded-panel rule the voters are bound by', () => {
+    const p = compile(withCouncil);
+    expect(p).toContain('2 concurring votes merge it');
+    expect(p).toContain('a partial council never merges');
+  });
+
+  it('retargets ACCEPT at the council rather than a human reviewer', () => {
+    expect(compile(withCouncil)).toContain('recommend the merge council');
+    expect(compile(metaharness)).toContain('recommend human review');
+  });
+
+  it('leaves upstream targets untouched when no council is configured', () => {
+    const p = compile(metaharness);
+    expect(p).toContain('Human review required');
+    expect(p).not.toContain('COUNCIL OF MODEL FAMILIES');
+  });
+
+  it('a council outranks autoMerge — they are not both described', () => {
+    const p = compile({ ...withCouncil, autoMerge: true });
+    expect(p).toContain('COUNCIL OF MODEL FAMILIES');
+    expect(p).not.toContain('guarded auto-merge ENABLED');
+  });
+
+  it('golden-snapshot: the council prompt is stable', () => {
+    expect(compile(withCouncil)).toMatchSnapshot();
+  });
+});
+
+describe('council config validation', () => {
+  const base = defaultConfig('acme/widget');
+
+  it('accepts the scaffolded council', () => {
+    expect(validateConfig(base).ok).toBe(true);
+  });
+
+  it('rejects a quorum of 1 — one family merging alone is not a council', () => {
+    const r = validateConfig({ ...base, council: { ...defaultCouncil(), quorum: 1 } });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join()).toMatch(/quorum must be an integer >= 2/);
+  });
+
+  it('rejects a quorum larger than the panel', () => {
+    const r = validateConfig({ ...base, council: { ...defaultCouncil(), families: ['claude', 'gemini'], quorum: 3 } });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join()).toMatch(/exceeds the panel size/);
+  });
+
+  it('rejects an unknown family', () => {
+    const r = validateConfig({ ...base, council: { ...defaultCouncil(), families: ['claude', 'llama' as never] } });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join()).toMatch(/unknown famil/);
+  });
+
+  it('warns, but does not fail, on a panel too small for cross-provider diversity', () => {
+    const r = validateConfig({ ...base, council: { ...defaultCouncil(), families: ['claude', 'gemini'], quorum: 2 } });
+    expect(r.ok).toBe(true);
+    expect(r.warnings.join()).toMatch(/cross-provider diversity needs three/);
+  });
+
+  it('warns when the public-fork authorship guard is switched off', () => {
+    const r = validateConfig({ ...base, council: { ...defaultCouncil(), requireSameRepoAuthor: false } });
+    expect(r.warnings.join()).toMatch(/any external PR will be council-judged/);
+  });
+
+  it('withDefaults leaves the council disabled when none is configured', () => {
+    expect(withDefaults(metaharness).council.enabled).toBe(false);
+  });
+
+  it('scaffolds an enabled council for a new target', () => {
+    expect(defaultConfig('a/b').council?.enabled).toBe(true);
   });
 });

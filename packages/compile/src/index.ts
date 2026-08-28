@@ -14,6 +14,7 @@ import {
   withDefaults,
   adrDir,
   adrPad,
+  type CouncilConfig,
 } from './config.js';
 
 export * from './config.js';
@@ -29,8 +30,8 @@ export function compile(config: DreamConfig): string {
   const c = withDefaults(config);
   const sections: string[] = [];
 
-  sections.push(header(c.repo, c.cron));
-  sections.push(invariants(c.extraDisciplines));
+  sections.push(header(c.repo, c.cron, c.council));
+  sections.push(invariants(c.extraDisciplines, c.council));
   sections.push(step0Context(c.slots, c.bonusModuli));
   sections.push(step05Build(c.buildStep, c.controlPlaneProbes));
   sections.push(step06Budget(c.ledgerPath));
@@ -45,7 +46,7 @@ export function compile(config: DreamConfig): string {
   sections.push(step16Witness());
   sections.push(step17to18Publish(c.labels));
   sections.push(step19Adr(adrDir(c.adrConvention), adrPad(c.adrConvention)));
-  sections.push(step20to25PublishFlow(c.branchPrefix, c.ledgerPath, c.autoMerge));
+  sections.push(step20to25PublishFlow(c.branchPrefix, c.ledgerPath, c.autoMerge, c.council));
   sections.push(step26SelfReview());
   sections.push(stopConditions());
   sections.push(finalReport());
@@ -56,7 +57,19 @@ export function compile(config: DreamConfig): string {
 
 // --- section builders -------------------------------------------------------
 
-function header(repo: string, cron: string): string {
+function header(repo: string, cron: string, council: CouncilConfig): string {
+  // The producer never judges its own work. Under a council that is a
+  // separation-of-duties rule, not a human gate: a different process, with no
+  // authoring context, casts the votes that decide the merge.
+  const promotionRule = council.enabled
+    ? `Never equate evaluation with autonomous promotion. Never merge your own
+candidate and never self-promote it — the merge judgement belongs to the council
+of model families that reviews this PR afterwards, not to the session that wrote
+it. Never weaken tests or benchmarks to obtain a favorable result. Be terse,
+technical, reproducible, and evidence driven.`
+    : `Never equate evaluation with autonomous promotion. Never merge. Never
+self-promote a candidate. Never weaken tests or benchmarks to obtain a
+favorable result. Be terse, technical, reproducible, and evidence driven.`;
   return `# Dream Machine — nightly routine for \`${repo}\`
 
 > Compiled by @dream-machine/compile. The authoritative copy is the cloud
@@ -74,12 +87,10 @@ ${repo}
 The repository is already checked out, fresh, on its default branch.
 
 The nightly cycle must produce durable evidence, not merely research prose.
-Never equate evaluation with autonomous promotion. Never merge. Never
-self-promote a candidate. Never weaken tests or benchmarks to obtain a
-favorable result. Be terse, technical, reproducible, and evidence driven.`;
+${promotionRule}`;
 }
 
-function invariants(extra: string[]): string {
+function invariants(extra: string[], council: CouncilConfig): string {
   const disc = extra.length
     ? `\n\nRepo-specific disciplines that bind every quantitative claim tonight:\n${extra.map((d) => `- ${d}`).join('\n')}`
     : '';
@@ -91,7 +102,7 @@ Every run must end in one of three states:
 ACCEPT | REJECT | INCONCLUSIVE
 \`\`\`
 
-ACCEPT = sufficient evidence to recommend human review. REJECT = a mandatory
+ACCEPT = sufficient evidence to recommend ${council.enabled ? 'the merge council' : 'human review'}. REJECT = a mandatory
 criterion failed. INCONCLUSIVE = the experiment could not distinguish candidate
 from baseline (including: evaluation blocked by missing credentials).
 
@@ -278,7 +289,10 @@ verification fails, VERDICT ≠ ACCEPT.
 **Promotion gate — evaluation is not promotion.** ACCEPT requires ALL of:
 evaluation_complete ∧ effect_positive ∧ significance_sufficient ∧
 no_material_regression ∧ tests_green ∧ reward_hack_clear ∧ critic_clear ∧
-witness_valid ∧ receipt_reproducible. The session never autonomously promotes.`;
+witness_valid ∧ receipt_reproducible. The session never autonomously promotes.
+
+These are the conditions for recommending promotion, not for performing it.
+Meeting every one of them still produces a PR, never a merge.`;
 }
 
 function step15Security(): string {
@@ -328,16 +342,36 @@ assume). Path: \`${adrDir}/${example}-dream-cycle-<surface>-<slug>.md\` using ${
 Follow the repo's own ADR shape; Status starts \`Proposed\`; add the INDEX row.`;
 }
 
-function step20to25PublishFlow(branchPrefix: string, ledgerPath: string, autoMerge: boolean): string {
-  const mergePolicy = autoMerge
-    ? `**Merge policy (guarded auto-merge ENABLED for this target).** Human review
+function step20to25PublishFlow(
+  branchPrefix: string,
+  ledgerPath: string,
+  autoMerge: boolean,
+  council: CouncilConfig,
+): string {
+  const mergePolicy = council.enabled
+    ? `**Merge policy (COUNCIL OF MODEL FAMILIES — no human gate).** There is no
+human reviewer waiting behind this PR. After it is opened, a council of
+${council.families.length} model families (${council.families.join(', ')}) reviews the diff, its
+checks, and the evidence in this body; ${council.quorum} concurring votes merge it.
+A family that cannot be reached voids the vote — a partial council never merges.
+
+Write the PR body for that reader. It is the entire case for the change, and it
+is read by voters that were not present for the work: state the hypothesis, the
+receipt, and the regression analysis plainly, and do not claim a number the diff
+and receipts cannot support. An unevidenced improvement reads as a reward hack to
+an adversarial panel and will be blocked.
+
+You still never merge and never self-promote. The producer does not judge: that
+separation, not a human, is what makes the council's majority mean anything.`
+    : autoMerge
+      ? `**Merge policy (guarded auto-merge ENABLED for this target).** Human review
 is still the default. Auto-merge may occur ONLY for a PR that (a) carries the
 explicit low-risk label configured for this repo, (b) is green on every required
 check, and (c) touched no evaluation/gate/safety infrastructure. Any candidate
 that changed a benchmark, gate, threshold, or security boundary is human-review-
 only, full stop. The session itself still never runs the merge — a separate,
 auditable CI job does, under those conditions.`
-    : `**Merge policy.** Human review required. The session never self-merges and
+      : `**Merge policy.** Human review required. The session never self-merges and
 never autonomously promotes candidate state.`;
   return `# STEP 20–25: BRANCH → VALIDATE → COMMIT → PUSH → DRAFT PR → LEDGER
 

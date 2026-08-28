@@ -30,6 +30,36 @@ export interface EvaluatorEntrypoints {
 
 export type AdrConvention = '3-digit' | '4-digit' | { pad: number; dir: string };
 
+/** The model families eligible to sit on the merge council. */
+export const COUNCIL_FAMILIES = ['claude', 'gemini', 'xai'] as const;
+export type CouncilFamily = (typeof COUNCIL_FAMILIES)[number];
+
+/**
+ * The council that makes the merge judgement in place of a human reviewer.
+ *
+ * Upstream gated merges on a human adding an `automerge-safe` label. Here the
+ * gate is a panel of model families from different providers, so no single
+ * family's blind spot becomes the repository's.
+ */
+export interface CouncilConfig {
+  /** Master switch. When false the repository has no merge gate at all. */
+  enabled: boolean;
+  /** The panel. Fewer than three families is a weaker check, not an error. */
+  families: CouncilFamily[];
+  /** Votes required to merge. Flat across all paths — nothing is human-only. */
+  quorum: number;
+  /** Only judge PRs whose head branch lives in the repo (public-fork safety). */
+  requireSameRepoAuthor?: boolean;
+  /** Refuse to vote a red PR in. */
+  requireAllChecksGreen?: boolean;
+  /** Diff line budget per prompt; longer diffs are truncated with a marker. */
+  maxDiffLines?: number;
+  /** Run the round-2 cross-examination between families. */
+  adversarialRound?: boolean;
+  /** Where witnessed council verdicts are logged. */
+  logPath?: string;
+}
+
 export interface DreamConfig {
   /** Target repo, "owner/name". */
   repo: string;
@@ -59,6 +89,8 @@ export interface DreamConfig {
   labels?: string[];
   /** If true, the guarded auto-merge policy is described in the PR step. */
   autoMerge?: boolean;
+  /** The merge council. When enabled, it decides merges instead of a human. */
+  council?: CouncilConfig;
 }
 
 export interface ValidationResult {
@@ -94,6 +126,26 @@ export function validateConfig(config: Partial<DreamConfig>): ValidationResult {
       if (!s.scan || s.scan.length < 1) warnings.push(`slot ${i}: no scan surfaces`);
     });
   }
+  if (config.council) {
+    const c = config.council;
+    const fams = Array.isArray(c.families) ? c.families : [];
+    const unknown = fams.filter((f) => !(COUNCIL_FAMILIES as readonly string[]).includes(f));
+    if (unknown.length) errors.push(`council.families: unknown famil(ies) ${unknown.join(', ')}`);
+    if (c.enabled && fams.length === 0) errors.push('council.families must list at least one family when enabled');
+    if (typeof c.quorum !== 'number' || !Number.isInteger(c.quorum) || c.quorum < 2) {
+      // A quorum of 1 is not a council — one family could merge alone, which is
+      // exactly the single-point-of-failure the panel exists to remove.
+      errors.push('council.quorum must be an integer >= 2');
+    } else if (c.quorum > fams.length) {
+      errors.push(`council.quorum (${c.quorum}) exceeds the panel size (${fams.length})`);
+    }
+    if (c.enabled && fams.length < 3) {
+      warnings.push(`council has ${fams.length} famil(ies); cross-provider diversity needs three`);
+    }
+    if (c.enabled && c.requireSameRepoAuthor === false) {
+      warnings.push('council.requireSameRepoAuthor is false — any external PR will be council-judged');
+    }
+  }
   if (config.bonusModuli) {
     for (const k of Object.keys(config.bonusModuli)) {
       if (!/^\d+$/.test(k)) errors.push(`bonusModuli key "${k}" must be an integer`);
@@ -120,6 +172,28 @@ export function withDefaults(config: DreamConfig): Required<Omit<DreamConfig, 'b
     branchPrefix: config.branchPrefix ?? 'dream/',
     labels: config.labels ?? ['dream-cycle', 'research'],
     autoMerge: config.autoMerge ?? false,
+    council: config.council ?? DISABLED_COUNCIL,
+  };
+}
+
+/** No council configured means no council — never a silently-enabled one. */
+export const DISABLED_COUNCIL: CouncilConfig = {
+  enabled: false,
+  families: [...COUNCIL_FAMILIES],
+  quorum: 2,
+};
+
+/** The council a target gets when it opts in without spelling out the details. */
+export function defaultCouncil(): CouncilConfig {
+  return {
+    enabled: true,
+    families: [...COUNCIL_FAMILIES],
+    quorum: 2,
+    requireSameRepoAuthor: true,
+    requireAllChecksGreen: true,
+    maxDiffLines: 800,
+    adversarialRound: true,
+    logPath: 'docs/dream-cycle/COUNCIL.md',
   };
 }
 
@@ -145,6 +219,7 @@ export function defaultConfig(repo: string): DreamConfig {
     branchPrefix: 'dream/',
     labels: ['dream-cycle', 'research'],
     autoMerge: false,
+    council: defaultCouncil(),
   };
 }
 
