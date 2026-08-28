@@ -118,7 +118,7 @@ export function scheduleInstructions(config: DreamConfig, opts: ScheduleOptions 
     `2. In Claude Code, invoke /schedule and create a routine with the body in routine.json`,
     `   (or use the RemoteTrigger "create" action with this body).`,
     `3. Set environment_id to your cloud environment.`,
-    `4. The nightly run writes gists, issues, and DRAFT PRs — it never merges.`,
+    `4. The nightly run writes gists, issues, and DRAFT PRs — it never merges its own work; the council gate decides that afterwards.`,
     opts.environmentId ? `   (environment_id is pre-filled: ${opts.environmentId})` : '',
   ]
     .filter(Boolean)

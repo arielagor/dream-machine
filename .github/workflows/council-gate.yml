@@ -1,0 +1,208 @@
+name: Council gate
+
+# The merge decision. Replaces the upstream `automerge.yml`, which required a
+# human to attach an `automerge-safe` label and refused outright to touch a
+# protected path. Here a council of three model families (Claude, Gemini, Grok)
+# reads the PR and votes; two concurring votes merge it. Nothing is human-gated.
+#
+# What still stops a merge:
+#   - the COUNCIL_ENABLED repository variable set to 'false' (operator kill
+#     switch — an off switch, not a review step);
+#   - a head branch that does not live in this repository (see SECURITY below);
+#   - any required check that is not green;
+#   - fewer than `quorum` MERGE votes;
+#   - ANY family being unreachable. A partial council never merges: the families
+#     that do answer still return confident-looking votes, so without this an
+#     outage silently turns a three-family gate into a one-family one.
+#
+# SECURITY — this repository is public and this workflow runs on
+# `pull_request_target`, which means it executes with repository secrets and
+# write permission in the BASE repo context. Two rules follow, and neither may
+# be relaxed:
+#   1. Never check out the PR head. The checkout below pins `base.sha`, so no
+#      untrusted code from the PR ever executes next to these secrets.
+#   2. Only judge PRs whose head branch is in this repository. Without that,
+#      any stranger could open a PR and have a three-model council merge it.
+#      The nightly runner pushes `dream/*` branches here, so it is unaffected.
+#
+# Required secrets: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`),
+# GEMINI_API_KEY, XAI_API_KEY. Missing any one of them makes that family
+# unreachable, which blocks the merge rather than quietly shrinking the panel.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to convene the council on'
+        required: true
+        type: string
+      dry_run:
+        description: 'Deliberate and report, but do not merge'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # Serialise per PR, and never cancel a deliberation midway: a half-finished
+  # council produces no verdict but has already spent its model calls.
+  group: council-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  council:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve target PR
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+          ENABLED: ${{ vars.COUNCIL_ENABLED }}
+          EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          if [ "${ENABLED:-true}" = "false" ]; then
+            echo "::notice::COUNCIL_ENABLED=false — the gate is switched off, no deliberation."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # For pull_request_target the head repo is on the event payload. For a
+          # manual dispatch it is not, so ask the API rather than assuming.
+          if [ -n "${EVENT_HEAD_REPO}" ]; then
+            HEAD_REPO="${EVENT_HEAD_REPO}"
+          else
+            HEAD_REPO=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRepository,headRepositoryOwner \
+              --jq '(.headRepositoryOwner.login // "") + "/" + (.headRepository.name // "")')
+          fi
+          if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+            echo "::notice::PR head is $HEAD_REPO, not $GITHUB_REPOSITORY — external contributions are not council-judged."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+
+      # Deliberately the BASE commit, never the PR head — see SECURITY above.
+      - uses: actions/checkout@v4
+        if: steps.target.outputs.skip == 'false'
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        if: steps.target.outputs.skip == 'false'
+        with: { node-version: 20, cache: npm }
+
+      - name: Build the engine
+        if: steps.target.outputs.skip == 'false'
+        run: npm ci && npm run build
+
+      - name: Install the Claude CLI
+        if: steps.target.outputs.skip == 'false'
+        # The Claude family votes through the CLI, authenticated by
+        # CLAUDE_CODE_OAUTH_TOKEN, so its calls bill the subscription rather
+        # than the metered API.
+        run: npm i -g @anthropic-ai/claude-code
+
+      - name: Wait for required checks
+        if: steps.target.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.target.outputs.pr }}
+        # Voting before the checks finish would either block every fresh PR or,
+        # worse, merge one whose tests had not run yet.
+        run: gh pr checks "$PR" --repo "$GITHUB_REPOSITORY" --watch --interval 30 --fail-fast || true
+
+      - name: Convene the council
+        if: steps.target.outputs.skip == 'false'
+        id: council
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          PR: ${{ steps.target.outputs.pr }}
+        run: |
+          set +e
+          node packages/cli/dist/bin.js council review \
+            --pr "$PR" --repo "$GITHUB_REPOSITORY" --dry-run \
+            > /tmp/transcript.md 2> /tmp/council.err
+          CODE=$?
+          set -e
+          cat /tmp/transcript.md
+          cat /tmp/council.err >&2 || true
+          # 0 = MERGE, 1 = BLOCK, 2 = not eligible, anything else = the CLI
+          # itself failed. Only 0 is ever treated as consent.
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" -gt 2 ]; then
+            echo "::error::council review failed to complete (exit $CODE) — treating as BLOCK."
+          fi
+
+      - name: Post the transcript
+        if: steps.target.outputs.skip == 'false' && hashFiles('/tmp/transcript.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.target.outputs.pr }}
+        # The transcript is the audit trail. It is posted whichever way the vote
+        # went, so a merge is never a decision nobody can read afterwards.
+        run: gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file /tmp/transcript.md || true
+
+      - name: Merge on a MERGE verdict
+        if: steps.target.outputs.skip == 'false' && steps.council.outputs.code == '0' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.target.outputs.pr }}
+        run: |
+          set -euo pipefail
+          # The nightly session opens draft PRs and never promotes its own work;
+          # marking it ready is part of the council's judgement, not the
+          # producer's.
+          gh pr ready "$PR" --repo "$GITHUB_REPOSITORY" || true
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label council-blocked || true
+
+      - name: Label a blocked PR
+        if: steps.target.outputs.skip == 'false' && steps.council.outputs.code != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.target.outputs.pr }}
+        run: |
+          gh label create council-blocked --repo "$GITHUB_REPOSITORY" \
+            --description "The council of model families declined to merge this" --color B60205 2>/dev/null || true
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label council-blocked || true
+
+      - name: Record the verdict in the council log
+        if: steps.target.outputs.skip == 'false' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.target.outputs.pr }}
+          DECISION: ${{ steps.council.outputs.code == '0' && 'MERGE' || 'BLOCK' }}
+        # Committed to the default branch rather than the PR branch, so the log
+        # survives whichever way the vote went — including on a PR that is
+        # closed unmerged.
+        run: |
+          set -euo pipefail
+          LOG=docs/dream-cycle/COUNCIL.md
+          mkdir -p "$(dirname "$LOG")"
+          if [ ! -f "$LOG" ]; then
+            printf '# Council verdicts\n\nEvery merge judgement this repository has made, and who made it.\n\n' > "$LOG"
+            printf '| Date | PR | Decision | Tally | Panel | Self-mod? | Rationale | Witness |\n' >> "$LOG"
+            printf '| --- | --- | --- | --- | --- | --- | --- | --- |\n' >> "$LOG"
+          fi
+          TALLY=$(grep -m1 -oE 'tally [0-9]+ MERGE / [0-9]+ BLOCK / [0-9]+ ABSTAIN' /tmp/transcript.md || echo 'n/a')
+          PANEL=$(grep -m1 -oE 'answered: [^·]*' /tmp/transcript.md | sed 's/answered: //;s/ *$//' || echo 'n/a')
+          WITNESS=$(grep -m1 -oE '^- witness: `[0-9a-f]+`' /tmp/transcript.md | grep -oE '[0-9a-f]{8}' | head -1 || echo '-')
+          SELFMOD=$(grep -qi 'Self-modification' /tmp/transcript.md && echo YES || echo no)
+          RATIONALE=$(grep -m1 '^> ' /tmp/transcript.md | sed 's/^> //;s/|/\\|/g' || echo '-')
+          printf '| %s | #%s | %s | %s | %s | %s | %s | %s |\n' \
+            "$(date -u +%Y-%m-%d)" "$PR" "$DECISION" "$TALLY" "$PANEL" "$SELFMOD" "$RATIONALE" "$WITNESS" >> "$LOG"
+
+          git config user.name 'dream-machine-council[bot]'
+          git config user.email 'council@users.noreply.github.com'
+          git fetch origin "${GITHUB_REF_NAME:-main}" --depth=1 || true
+          git add "$LOG"
+          git diff --cached --quiet || git commit -m "council(#${PR}): ${DECISION}"
+          git push origin "HEAD:${{ github.event.pull_request.base.ref || 'main' }}" || \
+            echo "::warning::could not push the council log (the merge may have moved the branch)"

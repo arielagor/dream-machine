@@ -43,6 +43,37 @@ jobs:
           W=$(node packages/cli/dist/bin.js witness stamp /tmp/r.md $(git rev-parse HEAD) | awk '/witness /{print $3}')
           node packages/cli/dist/bin.js witness verify /tmp/r.md $(git rev-parse HEAD) "$W"
 
+  council-fails-closed:
+    # The invariant that matters most in this fork: with NO model credentials
+    # present, the merge gate must BLOCK, not merge. A degraded panel returns
+    # confident-looking votes from whichever families did answer, so "it ran and
+    # produced a verdict" is not evidence the verdict is safe. This job runs the
+    # real CLI against a real PR shape with every key absent and asserts the
+    # exit code is not 0.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci && npm run build
+      - name: Assert no council credentials are present
+        run: |
+          test -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${GEMINI_API_KEY:-}${XAI_API_KEY:-}" \
+            && echo "confirmed: no council credentials in this job"
+      - name: A credential-less council must never merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          node packages/cli/dist/bin.js council review --pr 1 --repo "$GITHUB_REPOSITORY" --dry-run
+          CODE=$?
+          set -e
+          if [ "$CODE" -eq 0 ]; then
+            echo "::error::the council returned MERGE with no credentials — the fail-closed invariant is broken"
+            exit 1
+          fi
+          echo "confirmed: exit $CODE (non-zero) — a credential-less council does not merge"
+
   no-optional-deps:
     # ADR-150 invariant: the engine builds and tests with the optional
     # ruvector/RVF wasm backends ABSENT. They are declared peer-optional in

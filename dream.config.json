@@ -1,5 +1,5 @@
 {
-  "repo": "ruvnet/dream-machine",
+  "repo": "arielagor/dream-machine",
   "cron": "0 9 * * *",
   "slots": [
     {
@@ -72,5 +72,19 @@
     "dream-cycle",
     "research"
   ],
-  "autoMerge": true
+  "autoMerge": true,
+  "council": {
+    "enabled": true,
+    "families": [
+      "claude",
+      "gemini",
+      "xai"
+    ],
+    "quorum": 2,
+    "requireSameRepoAuthor": true,
+    "requireAllChecksGreen": true,
+    "maxDiffLines": 800,
+    "adversarialRound": true,
+    "logPath": "docs/dream-cycle/COUNCIL.md"
+  }
 }

@@ -163,7 +163,7 @@ async function main() {
   sh('git', ['push', '-u', 'origin', branch, '--force-with-lease']);
   try {
     const pr = sh('gh', ['pr', 'create', '--draft', '--title', `${title} (research)`,
-      '--body', `Nightly research (GitHub Actions). See ${issueRef}.\n\nVerdict: INCONCLUSIVE (research-only). **Do not self-merge** — human review required.\n\nWitness: \`${w.witness}\``,
+      '--body', `Nightly research (GitHub Actions). See ${issueRef}.\n\nVerdict: INCONCLUSIVE (research-only). This session does not merge its own work — the council gate reviews this PR and decides.\n\nWitness: \`${w.witness}\``,
       '--label', 'dream-cycle']);
     console.log('draft PR:', pr);
   } catch (e) {
