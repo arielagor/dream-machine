@@ -128,11 +128,11 @@ jobs:
           set +e
           node packages/cli/dist/bin.js council review \
             --pr "$PR" --repo "$GITHUB_REPOSITORY" --dry-run \
-            > /tmp/transcript.md 2> /tmp/council.err
+            > council-transcript.md 2> council.err
           CODE=$?
           set -e
-          cat /tmp/transcript.md
-          cat /tmp/council.err >&2 || true
+          cat council-transcript.md
+          cat council.err >&2 || true
           # 0 = MERGE, 1 = BLOCK, 2 = not eligible, anything else = the CLI
           # itself failed. Only 0 is ever treated as consent.
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
@@ -141,37 +141,13 @@ jobs:
           fi
 
       - name: Post the transcript
-        if: steps.target.outputs.skip == 'false' && hashFiles('/tmp/transcript.md') != ''
+        if: steps.target.outputs.skip == 'false' && hashFiles('council-transcript.md') != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ steps.target.outputs.pr }}
         # The transcript is the audit trail. It is posted whichever way the vote
         # went, so a merge is never a decision nobody can read afterwards.
-        run: gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file /tmp/transcript.md || true
-
-      - name: Merge on a MERGE verdict
-        if: steps.target.outputs.skip == 'false' && steps.council.outputs.code == '0' && !inputs.dry_run
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ steps.target.outputs.pr }}
-        run: |
-          set -euo pipefail
-          # The nightly session opens draft PRs and never promotes its own work;
-          # marking it ready is part of the council's judgement, not the
-          # producer's.
-          gh pr ready "$PR" --repo "$GITHUB_REPOSITORY" || true
-          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
-          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label council-blocked || true
-
-      - name: Label a blocked PR
-        if: steps.target.outputs.skip == 'false' && steps.council.outputs.code != '0'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ steps.target.outputs.pr }}
-        run: |
-          gh label create council-blocked --repo "$GITHUB_REPOSITORY" \
-            --description "The council of model families declined to merge this" --color B60205 2>/dev/null || true
-          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label council-blocked || true
+        run: gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file council-transcript.md || true
 
       - name: Record the verdict in the council log
         if: steps.target.outputs.skip == 'false' && !inputs.dry_run
@@ -191,18 +167,50 @@ jobs:
             printf '| Date | PR | Decision | Tally | Panel | Self-mod? | Rationale | Witness |\n' >> "$LOG"
             printf '| --- | --- | --- | --- | --- | --- | --- | --- |\n' >> "$LOG"
           fi
-          TALLY=$(grep -m1 -oE 'tally [0-9]+ MERGE / [0-9]+ BLOCK / [0-9]+ ABSTAIN' /tmp/transcript.md || echo 'n/a')
-          PANEL=$(grep -m1 -oE 'answered: [^·]*' /tmp/transcript.md | sed 's/answered: //;s/ *$//' || echo 'n/a')
-          WITNESS=$(grep -m1 -oE '^- witness: `[0-9a-f]+`' /tmp/transcript.md | grep -oE '[0-9a-f]{8}' | head -1 || echo '-')
-          SELFMOD=$(grep -qi 'Self-modification' /tmp/transcript.md && echo YES || echo no)
-          RATIONALE=$(grep -m1 '^> ' /tmp/transcript.md | sed 's/^> //;s/|/\\|/g' || echo '-')
+          TALLY=$(grep -m1 -oE 'tally [0-9]+ MERGE / [0-9]+ BLOCK / [0-9]+ ABSTAIN' council-transcript.md || echo 'n/a')
+          PANEL=$(grep -m1 -oE 'answered: [^·]*' council-transcript.md | sed 's/answered: //;s/ *$//' || echo 'n/a')
+          WITNESS=$(grep -m1 -oE '^- witness: `[0-9a-f]+`' council-transcript.md | grep -oE '[0-9a-f]{8}' | head -1 || echo '-')
+          SELFMOD=$(grep -qi 'Self-modification' council-transcript.md && echo YES || echo no)
+          RATIONALE=$(grep -m1 '^> ' council-transcript.md | sed 's/^> //;s/|/\\|/g' || echo '-')
           printf '| %s | #%s | %s | %s | %s | %s | %s | %s |\n' \
             "$(date -u +%Y-%m-%d)" "$PR" "$DECISION" "$TALLY" "$PANEL" "$SELFMOD" "$RATIONALE" "$WITNESS" >> "$LOG"
 
+          BASE="${{ github.event.pull_request.base.ref || 'main' }}"
           git config user.name 'dream-machine-council[bot]'
           git config user.email 'council@users.noreply.github.com'
-          git fetch origin "${GITHUB_REF_NAME:-main}" --depth=1 || true
           git add "$LOG"
-          git diff --cached --quiet || git commit -m "council(#${PR}): ${DECISION}"
-          git push origin "HEAD:${{ github.event.pull_request.base.ref || 'main' }}" || \
-            echo "::warning::could not push the council log (the merge may have moved the branch)"
+          git diff --cached --quiet && exit 0
+          git commit -m "council(#${PR}): ${DECISION}"
+          # This step runs BEFORE the merge, so the base branch has not moved
+          # under us yet. Still retry with a rebase: a concurrent council run on
+          # another PR can land its own row between our fetch and our push.
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$BASE"; then exit 0; fi
+            git fetch origin "$BASE"
+            git rebase "origin/$BASE" || { git rebase --abort || true; break; }
+          done
+          echo "::warning::could not push the council log after 3 attempts; the verdict transcript is still on the PR"
+
+      - name: Label a blocked PR
+        if: steps.target.outputs.skip == 'false' && steps.council.outputs.code != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.target.outputs.pr }}
+        run: |
+          gh label create council-blocked --repo "$GITHUB_REPOSITORY" \
+            --description "The council of model families declined to merge this" --color B60205 2>/dev/null || true
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label council-blocked || true
+
+      - name: Merge on a MERGE verdict
+        if: steps.target.outputs.skip == 'false' && steps.council.outputs.code == '0' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.target.outputs.pr }}
+        run: |
+          set -euo pipefail
+          # The nightly session opens draft PRs and never promotes its own work;
+          # marking it ready is part of the council's judgement, not the
+          # producer's.
+          gh pr ready "$PR" --repo "$GITHUB_REPOSITORY" || true
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label council-blocked || true

@@ -5,3 +5,7 @@ coverage/
 .DS_Store
 .env
 .dream/
+
+# Council gate run artifacts (written into the workspace so hashFiles can see them)
+council-transcript.md
+council.err
