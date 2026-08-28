@@ -64,15 +64,43 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          # Exercise the real path. A non-existent PR would also exit non-zero —
+          # from `gh pr view`, never reaching the panel — so an exit-code-only
+          # assertion would keep passing even with the invariant broken. Find a
+          # PR that actually exists, and if none does, FAIL rather than pass
+          # having proven nothing.
+          PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --state all --limit 1 --json number --jq '.[0].number // empty')
+          SRC="$GITHUB_REPOSITORY"
+          if [ -z "$PR" ]; then
+            SRC=ruvnet/dream-machine
+            PR=$(gh pr list --repo "$SRC" --state all --limit 1 --json number --jq '.[0].number // empty')
+          fi
+          if [ -z "$PR" ]; then
+            echo "::error::no pull request available to exercise the gate against — the fail-closed invariant was NOT verified"
+            exit 1
+          fi
+          echo "exercising the gate against $SRC#$PR"
+
           set +e
-          node packages/cli/dist/bin.js council review --pr 1 --repo "$GITHUB_REPOSITORY" --dry-run
+          node packages/cli/dist/bin.js council review --pr "$PR" --repo "$SRC" --dry-run > out.md 2> err.txt
           CODE=$?
           set -e
+          cat out.md; cat err.txt >&2 || true
+
           if [ "$CODE" -eq 0 ]; then
             echo "::error::the council returned MERGE with no credentials — the fail-closed invariant is broken"
             exit 1
           fi
-          echo "confirmed: exit $CODE (non-zero) — a credential-less council does not merge"
+          # Assert the REASON, not just the exit code: the panel must have been
+          # convened and found degraded. Anything else (a gather failure, a crash)
+          # means this job did not test what it claims to test.
+          if ! grep -q 'Degraded panel' out.md; then
+            echo "::error::the run did not reach a degraded-panel verdict, so the fail-closed path was never exercised."
+            echo "::error::exit was $CODE, but for some other reason — see the output above."
+            exit 1
+          fi
+          echo "confirmed: the panel convened, every family was unreachable, and the verdict was BLOCK"
 
   no-optional-deps:
     # ADR-150 invariant: the engine builds and tests with the optional
