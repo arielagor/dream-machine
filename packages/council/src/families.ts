@@ -37,7 +37,8 @@ export function modelFor(family: Family, env: NodeJS.ProcessEnv = process.env): 
       // Opus at call time, so this line cannot go stale.
       return env.COUNCIL_CLAUDE_MODEL || 'opus';
     case 'gemini':
-      return env.COUNCIL_GEMINI_MODEL || 'gemini-3.1-pro-preview';
+      // Frontier seat (2026-11-18): Gemini 4 Neon, AA v5.0.1 61, $3/$15 per 1M.
+      return env.COUNCIL_GEMINI_MODEL || 'gemini-4-neon';
     case 'xai':
       return env.COUNCIL_XAI_MODEL || 'grok-4.5';
   }
